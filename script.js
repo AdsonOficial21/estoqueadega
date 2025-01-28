@@ -13,7 +13,8 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const database = firebase.database();
 
-// Move these functions outside of DOMContentLoaded to make them globally accessible
+const SALES_PER_PAGE = 20;
+
 window.openSaleModal = function() {
   const modalOverlay = document.getElementById('saleModalOverlay');
   modalOverlay.style.display = 'block';
@@ -396,6 +397,7 @@ window.selectPaymentMethod = function(method) {
   const selectedProducts = document.querySelectorAll('.selected-product-item');
   const grandTotal = document.querySelector('.grand-total-value').textContent;
   const modalElement = document.querySelector('.modal');
+  const editingSaleId = modalElement.dataset.editingSaleId;
   
   const paymentMethodText = {
     'cash': 'Dinheiro',
@@ -412,8 +414,6 @@ window.selectPaymentMethod = function(method) {
       const quantity = parseInt(item.querySelector('input[type="number"]').value);
       const unitPrice = parseFloat(item.querySelector('.unit-price').textContent);
       const total = parseFloat(item.querySelector('.total-value').textContent);
-      const discount = (quantity * unitPrice) - total;
-      
       return {
         name: item.querySelector('.product-name').textContent,
         quantity: quantity,
@@ -425,18 +425,13 @@ window.selectPaymentMethod = function(method) {
     total: parseFloat(grandTotal.replace('R$ ', ''))
   };
 
-  // Create an array of promises for updating product quantities
   const updatePromises = Array.from(selectedProducts).map(item => {
     const productName = item.querySelector('.product-name').textContent;
     const soldQuantity = parseInt(item.querySelector('input[type="number"]').value);
     
-    // Find the product in the products array
     const product = window.products.find(p => p.name === productName);
     if (product) {
-      // Calculate new quantity
       const newQuantity = product.quantity - soldQuantity;
-      
-      // Update product quantity in Firebase
       return database.ref('products/' + product.id).update({
         quantity: newQuantity
       });
@@ -444,20 +439,27 @@ window.selectPaymentMethod = function(method) {
     return Promise.resolve();
   });
 
-  // Wait for all product updates and sale save to complete
+  let savePromise;
+  if (editingSaleId) {
+    savePromise = database.ref('sales/' + editingSaleId).update(saleData);
+  } else {
+    const newSaleRef = database.ref('sales').push();
+    savePromise = newSaleRef.set(saleData);
+  }
+
   Promise.all([
     ...updatePromises,
-    database.ref('sales').push(saleData)
+    savePromise
   ])
     .then(() => {
-      console.log('Sale saved and products updated successfully');
+      console.log(editingSaleId ? 'Sale updated successfully' : 'Sale saved successfully');
       closePaymentModal();
       closeSaleModal();
       updateSalesTable();
     })
     .catch((error) => {
-      console.error('Error saving sale or updating products:', error);
-      alert('Erro ao salvar venda. Por favor, tente novamente.');
+      console.error('Error saving/updating sale:', error);
+      alert('Erro ao salvar/atualizar venda. Por favor, tente novamente.');
     });
 };
 
@@ -471,7 +473,6 @@ function updateGrandTotal() {
     grandTotal += parseFloat(totalElement.textContent);
   });
 
-  // Check if grand total div exists, if not create it
   let grandTotalDiv = document.getElementById('grandTotal');
   if (!grandTotalDiv) {
     grandTotalDiv = document.createElement('div');
@@ -480,7 +481,6 @@ function updateGrandTotal() {
     selectedProductsList.parentNode.appendChild(grandTotalDiv);
   }
 
-  // Update grand total display
   grandTotalDiv.innerHTML = `
     <div class="grand-total-line"></div>
     <div class="grand-total-content">
@@ -494,20 +494,15 @@ window.updateQuantity = undefined;
 
 window.deleteSale = function(saleId) {
   if (confirm('Tem certeza que deseja excluir esta venda?')) {
-    // First get the sale data
     database.ref('sales/' + saleId).once('value')
       .then((snapshot) => {
         const sale = snapshot.val();
         
-        // Create an array of promises for updating product quantities
         const updatePromises = sale.products.map(saleProduct => {
-          // Find the product in the products array
           const product = window.products.find(p => p.name === saleProduct.name);
           if (product) {
-            // Calculate new quantity by adding back the sold quantity
             const newQuantity = product.quantity + saleProduct.quantity;
             
-            // Update product quantity in Firebase
             return database.ref('products/' + product.id).update({
               quantity: newQuantity
             });
@@ -515,7 +510,6 @@ window.deleteSale = function(saleId) {
           return Promise.resolve();
         });
 
-        // Wait for all product updates and sale deletion to complete
         return Promise.all([
           ...updatePromises,
           database.ref('sales/' + saleId).remove()
@@ -532,6 +526,238 @@ window.deleteSale = function(saleId) {
   }
 };
 
+function updateSalesTable(page = 1) {
+  const salesTableBody = document.querySelector('.sales-table tbody');
+  if (!salesTableBody) return;
+
+  salesTableBody.innerHTML = '';
+
+  database.ref('sales').orderByChild('date').once('value')
+    .then((snapshot) => {
+      const salesArray = [];
+      snapshot.forEach((childSnapshot) => {
+        salesArray.push({
+          id: childSnapshot.key,
+          ...childSnapshot.val()
+        });
+      });
+      
+      salesArray.reverse();
+
+      // Calculate pagination
+      const totalSales = salesArray.length;
+      const totalPages = Math.ceil(totalSales / SALES_PER_PAGE);
+      const startIndex = (page - 1) * SALES_PER_PAGE;
+      const endIndex = startIndex + SALES_PER_PAGE;
+      const currentPageSales = salesArray.slice(startIndex, endIndex);
+
+      // Update table with current page sales
+      currentPageSales.forEach((sale) => {
+        const productsText = sale.products.map(p => 
+          `${p.quantity}x ${p.name}`  
+        ).join(', ');
+
+        const row = `
+          <tr>
+            <td>${sale.date}</td>
+            <td>${sale.time}</td>
+            <td>${productsText}</td>
+            <td data-payment-method>${sale.paymentMethod}</td>
+            <td>R$ ${sale.total.toFixed(2)}</td>
+            <td>
+              <button onclick="editSale('${sale.id}')" class="edit-sale-btn" title="Editar venda">
+                <i class="fas fa-edit"></i>
+              </button>
+              <button onclick="deleteSale('${sale.id}')" class="delete-sale-btn" title="Excluir venda">
+                <i class="fas fa-trash"></i>
+              </button>
+            </td>
+          </tr>
+        `;
+        salesTableBody.innerHTML += row;
+      });
+
+      // Create pagination controls
+      updatePagination(page, totalPages);
+    })
+    .catch((error) => {
+      console.error('Error loading sales:', error);
+    });
+}
+
+// Add this new function for pagination controls
+function updatePagination(currentPage, totalPages) {
+  const salesTable = document.querySelector('.sales-table');
+  let paginationDiv = document.querySelector('.pagination');
+  
+  if (paginationDiv) {
+    paginationDiv.remove();
+  }
+
+  paginationDiv = document.createElement('div');
+  paginationDiv.className = 'pagination';
+  
+  // Only show pagination if there's more than one page
+  if (totalPages > 1) {
+    // Previous button
+    const prevButton = document.createElement('button');
+    prevButton.className = `pagination-btn ${currentPage === 1 ? 'disabled' : ''}`;
+    prevButton.innerHTML = '<i class="fas fa-chevron-left"></i>';
+    prevButton.disabled = currentPage === 1;
+    prevButton.onclick = () => updateSalesTable(currentPage - 1);
+    paginationDiv.appendChild(prevButton);
+
+    // Page numbers
+    for (let i = 1; i <= totalPages; i++) {
+      if (
+        i === 1 || 
+        i === totalPages || 
+        (i >= currentPage - 1 && i <= currentPage + 1)
+      ) {
+        const pageButton = document.createElement('button');
+        pageButton.className = `pagination-btn ${i === currentPage ? 'active' : ''}`;
+        pageButton.textContent = i;
+        pageButton.onclick = () => updateSalesTable(i);
+        paginationDiv.appendChild(pageButton);
+      } else if (
+        i === currentPage - 2 || 
+        i === currentPage + 2
+      ) {
+        const ellipsis = document.createElement('span');
+        ellipsis.textContent = '...';
+        ellipsis.style.color = '#2c3e50';
+        paginationDiv.appendChild(ellipsis);
+      }
+    }
+
+    // Next button
+    const nextButton = document.createElement('button');
+    nextButton.className = `pagination-btn ${currentPage === totalPages ? 'disabled' : ''}`;
+    nextButton.innerHTML = '<i class="fas fa-chevron-right"></i>';
+    nextButton.disabled = currentPage === totalPages;
+    nextButton.onclick = () => updateSalesTable(currentPage + 1);
+    paginationDiv.appendChild(nextButton);
+
+    // Add pagination controls after the table
+    salesTable.parentNode.insertBefore(paginationDiv, salesTable.nextSibling);
+  }
+}
+
+function filterSalesByDate(selectedDate) {
+  const salesTableBody = document.querySelector('.sales-table tbody');
+  if (!salesTableBody) return;
+
+  salesTableBody.innerHTML = '';
+
+  database.ref('sales').orderByChild('date').once('value')
+    .then((snapshot) => {
+      const salesArray = [];
+      snapshot.forEach((childSnapshot) => {
+        const sale = childSnapshot.val();
+        if (sale.date === selectedDate) {
+          salesArray.push({
+            id: childSnapshot.key,
+            ...sale
+          });
+        }
+      });
+      
+      salesArray.reverse();
+
+      // Remove existing pagination if it exists
+      const existingPagination = document.querySelector('.pagination');
+      if (existingPagination) {
+        existingPagination.remove();
+      }
+
+      // Display all filtered sales without pagination
+      salesArray.forEach((sale) => {
+        const productsText = sale.products.map(p => 
+          `${p.quantity}x ${p.name}`  
+        ).join(', ');
+
+        const row = `
+          <tr>
+            <td>${sale.date}</td>
+            <td>${sale.time}</td>
+            <td>${productsText}</td>
+            <td data-payment-method>${sale.paymentMethod}</td>
+            <td>R$ ${sale.total.toFixed(2)}</td>
+            <td>
+              <button onclick="editSale('${sale.id}')" class="edit-sale-btn" title="Editar venda">
+                <i class="fas fa-edit"></i>
+              </button>
+              <button onclick="deleteSale('${sale.id}')" class="delete-sale-btn" title="Excluir venda">
+                <i class="fas fa-trash"></i>
+              </button>
+            </td>
+          </tr>
+        `;
+        salesTableBody.innerHTML += row;
+      });
+    })
+    .catch((error) => {
+      console.error('Error loading sales:', error);
+    });
+}
+
+window.editSale = function(saleId) {
+  database.ref('sales/' + saleId).once('value')
+    .then((snapshot) => {
+      const sale = snapshot.val();
+      if (!sale) return;
+      
+      openSaleModal();
+
+      document.querySelector('.modal').dataset.originalTime = sale.time;
+
+      const selectedProductsList = document.querySelector('.selected-products-list');
+      const selectedProductsSection = document.getElementById('selectedProducts');
+      const saleFormButtons = document.querySelector('.sale-form-buttons');
+
+      selectedProductsSection.style.display = 'block';
+      saleFormButtons.style.display = 'flex';
+
+      sale.products.forEach(product => {
+        selectedProductsList.innerHTML += `
+          <div class="selected-product-item" data-product-id="${product.id || 'legacy'}">
+            <div class="selected-product-info">
+              <img src="${product.image || window.products.find(p => p.name === product.name)?.image || 'placeholder.png'}" 
+                   alt="${product.name}" class="selected-product-image">
+              <span class="product-name">${product.name}</span>
+              <span class="separator">|</span>
+              <span class="product-price">
+                R$ <span class="unit-price">${product.unitPrice.toFixed(2)}</span>
+              </span>
+              <span class="separator">|</span>
+              <span class="quantity-label">Quantidade: </span>
+              <input type="number" value="${product.quantity}" min="1" 
+                     oninput="updateQuantityRealTime('${product.id || 'legacy'}', this.value)"
+                     onfocus="this.select()">
+              <span class="separator">|</span>
+              <span class="total-price">
+                Total: R$ <span class="total-value">${(product.unitPrice * product.quantity).toFixed(2)}</span>
+              </span>
+            </div>
+            <button class="remove-product" onclick="removeSelectedProduct('${product.id || 'legacy'}')">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+        `;
+      });
+
+      updateGrandTotal();
+
+      document.querySelector('.modal-header h2').textContent = 'Editar Venda';
+
+      document.querySelector('.modal').dataset.editingSaleId = saleId;
+    })
+    .catch((error) => {
+      console.error('Error loading sale for editing:', error);
+      alert('Erro ao carregar venda para edição. Por favor, tente novamente.');
+    });
+};
+
 function loadSalesTable() {
   const content = document.querySelector('.content');
   content.innerHTML = `
@@ -540,8 +766,16 @@ function loadSalesTable() {
         <i class="fas fa-plus"></i>
         Nova Venda
       </button>
-      <h2>Histórico de Vendas</h2>
+      <div class="calendar-controls">
+        <button class="calendar-icon" id="datePicker">
+          <i class="fas fa-calendar-alt"></i>
+        </button>
+        <button class="calendar-close" id="clearDateFilter">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
     </div>
+    <h2>Histórico de Vendas</h2>
     <table class="sales-table">
       <thead>
         <tr>
@@ -558,66 +792,54 @@ function loadSalesTable() {
       </tbody>
     </table>
 
-    <!-- Rest of the modal HTML remains the same -->
     ${generateSaleModalHTML()}
   `;
 
-  // Add event listeners for sale modal
+  // Initialize Flatpickr date picker
+  const datePicker = document.getElementById('datePicker');
+  const clearDateFilter = document.getElementById('clearDateFilter');
+  
+  if (datePicker) {
+    const fp = flatpickr(datePicker, {
+      dateFormat: "d/m/Y",
+      locale: {
+        firstDayOfWeek: 0,
+        weekdays: {
+          shorthand: ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'],
+          longhand: ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
+        },
+        months: {
+          shorthand: ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'],
+          longhand: ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+        }
+      },
+      onChange: function(selectedDates, dateStr) {
+        filterSalesByDate(dateStr);
+        datePicker.classList.add('filter-active');
+        clearDateFilter.classList.add('visible');
+      }
+    });
+
+    // Add click event for clear filter button
+    clearDateFilter.addEventListener('click', function() {
+      fp.clear();
+      updateSalesTable();
+      datePicker.classList.remove('filter-active');
+      clearDateFilter.classList.remove('visible');
+    });
+  }
+
   setupSaleModalListeners();
-  // Update sales table immediately after loading
   updateSalesTable();
 }
 
-function generateSaleModalHTML() {
-  // Return the existing sale modal HTML
-  return `
-    <div class="modal-overlay" id="saleModalOverlay">
-      <div class="modal">
-        <div class="modal-header">
-          <h2>Nova Venda</h2>
-          <button class="modal-close" onclick="closeSaleModal()">×</button>
-        </div>
-        <div class="modal-content">
-          <div class="sale-form">
-            <div class="product-search-container">
-              <div class="search-wrapper">
-                <input 
-                  type="text" 
-                  class="product-search-input" 
-                  placeholder="Pesquisar produto..."
-                  id="saleProductSearch"
-                >
-                <i class="fas fa-search product-search-icon"></i>
-              </div>
-              <div class="search-results" id="searchResults"></div>
-            </div>
-            <div class="selected-products" id="selectedProducts" style="display: none;">
-              <h3>Produtos Selecionados</h3>
-              <div class="selected-products-list"></div>
-            </div>
-            <div class="sale-form-buttons">
-              <button class="payment-button select-payment">
-                Selecionar forma de pagamento
-              </button>
-              <button class="payment-button close-sale" onclick="closeSaleModal()">
-                Fechar
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
+// Add this new function to filter sales by date
 function setupSaleModalListeners() {
-  // Add event listener for product search
   const searchInput = document.getElementById('saleProductSearch');
   if (searchInput) {
     searchInput.addEventListener('input', handleSaleProductSearch);
   }
 
-  // Add event listener for select payment button
   const selectPaymentBtn = document.querySelector('.select-payment');
   if (selectPaymentBtn) {
     selectPaymentBtn.addEventListener('click', openPaymentModal);
@@ -633,7 +855,6 @@ function handleSaleProductSearch(e) {
     return;
   }
 
-  // Changed the filter to check if product name starts with the search term
   const filteredProducts = window.products.filter(product => 
     normalizeString(product.name.toLowerCase()).startsWith(searchTerm)
   );
@@ -661,15 +882,12 @@ function handleSaleProductSearch(e) {
     </div>
   `).join('');
 
-  // Set selected index to 0 if there are results
   window.selectedIndex = filteredProducts.length > 0 ? 0 : -1;
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-  // Initialize products array to store the data
   window.products = [];
   
-  // Load products from Firebase when the application starts
   loadProductsFromFirebase();
   
   const productsLink = document.querySelector('a[href="https://example.com/produtos"]');
@@ -681,7 +899,6 @@ document.addEventListener('DOMContentLoaded', function() {
     e.preventDefault();
     loadProductsTable();
     
-    // Remove active class from all links and add to products
     document.querySelectorAll('.menu a').forEach(a => a.classList.remove('active'));
     this.classList.add('active');
   });
@@ -690,7 +907,6 @@ document.addEventListener('DOMContentLoaded', function() {
     e.preventDefault();
     loadSalesTable();
     
-    // Remove active class from all links and add to sales
     document.querySelectorAll('.menu a').forEach(a => a.classList.remove('active'));
     this.classList.add('active');
   });
@@ -700,7 +916,6 @@ document.addEventListener('DOMContentLoaded', function() {
       e.preventDefault();
       loadPaymentMethodTotals();
       
-      // Remove active class from all links and add to movimentacoes
       document.querySelectorAll('.menu a').forEach(a => a.classList.remove('active'));
       this.classList.add('active');
     });
@@ -711,19 +926,15 @@ document.addEventListener('DOMContentLoaded', function() {
       e.preventDefault();
       loadCashHistory();
       
-      // Remove active class from all links and add to cash
       document.querySelectorAll('.menu a').forEach(a => a.classList.remove('active'));
       this.classList.add('active');
     });
   }
   
-  // Load sales table by default (only once)
   loadSalesTable();
   
-  // Update keydown event listener to handle both modals
   document.addEventListener('keydown', function(event) {
     if (event.key === 'Escape') {
-      // Check if any modal is open and close it
       const saleModal = document.getElementById('saleModalOverlay');
       const quantityModal = document.getElementById('quantityModalOverlay');
       const paymentModal = document.getElementById('paymentModalOverlay');
@@ -741,7 +952,6 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   });
 
-  // Add keyboard event listener to search input
   const searchInput = document.getElementById('saleProductSearch');
   if (searchInput) {
     searchInput.addEventListener('keydown', function(e) {
@@ -750,20 +960,19 @@ document.addEventListener('DOMContentLoaded', function() {
       
       if (items.length === 0) return;
 
-      // Initialize selectedIndex if not set
       if (typeof window.selectedIndex === 'undefined') {
         window.selectedIndex = -1;
       }
 
       switch(e.key) {
         case 'ArrowDown':
-          e.preventDefault(); // Prevent cursor movement in input
+          e.preventDefault(); 
           window.selectedIndex = Math.min(window.selectedIndex + 1, items.length - 1);
           updateSelection(items);
           break;
 
         case 'ArrowUp':
-          e.preventDefault(); // Prevent cursor movement in input
+          e.preventDefault(); 
           window.selectedIndex = Math.max(window.selectedIndex - 1, 0);
           updateSelection(items);
           break;
@@ -775,7 +984,6 @@ document.addEventListener('DOMContentLoaded', function() {
             const productId = selectedItem.dataset.productId;
             selectProduct(productId);
           } else if (items.length > 0) {
-            // If no item is selected but there are results, select the first one
             const productId = items[0].dataset.productId;
             selectProduct(productId);
           }
@@ -786,15 +994,12 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function updateSelection(items) {
-  // Remove highlight from all items
   Array.from(items).forEach(item => {
     item.classList.remove('selected');
   });
 
-  // Add highlight to selected item
   if (window.selectedIndex >= 0 && items[window.selectedIndex]) {
     items[window.selectedIndex].classList.add('selected');
-    // Ensure selected item is visible
     items[window.selectedIndex].scrollIntoView({ 
       behavior: 'smooth', 
       block: 'nearest' 
@@ -804,7 +1009,6 @@ function updateSelection(items) {
 
 function loadProductsFromFirebase() {
   const productsRef = database.ref('products');
-  // Remove any existing listeners before adding a new one
   productsRef.off('value');
   productsRef.on('value', (snapshot) => {
     window.products = [];
@@ -814,10 +1018,8 @@ function loadProductsFromFirebase() {
       window.products.push(product);
     });
       
-    // Sort products alphabetically by name
     window.products.sort((a, b) => a.name.localeCompare(b.name));
       
-    // Update the table if we're on the products page
     const productsTable = document.getElementById('productsTableBody');
     if (productsTable) {
       productsTable.innerHTML = renderProductsTable();
@@ -896,12 +1098,9 @@ function loadProductsTable() {
     </div>
   `;
 
-  // Get form, create single reference and add submit listener ONCE
   const form = document.getElementById('addProductForm');
-  // Remove any existing listeners by cloning and replacing the form
   const clonedForm = form.cloneNode(true);
   form.parentNode.replaceChild(clonedForm, form);
-  // Add new listener for adding products
   clonedForm.addEventListener('submit', (e) => handleFormSubmit(e));
     
   const searchInput = document.querySelector('.search-input');
@@ -920,13 +1119,11 @@ function handleFormSubmit(e, editId = null) {
   
   const profit = salePrice - costPrice;
   
-  // Determine which image source to use
   let finalImageUrl;
   if (imageUpload.files && imageUpload.files[0]) {
     const reader = new FileReader();
     reader.onload = function(e) {
       finalImageUrl = e.target.result;
-      // Clear the URL input since we're using uploaded image
       imageUrl.value = '';
       
       const productData = {
@@ -1008,11 +1205,9 @@ function editProduct(id) {
   document.getElementById('quantity').value = product.quantity;
   document.getElementById('imageUrl').value = product.image;
   
-  // Remove any existing submit event listeners
   const form = document.getElementById('addProductForm');
   const clonedForm = form.cloneNode(true);
   form.parentNode.replaceChild(clonedForm, form);
-  // Add new submit event listener for editing
   clonedForm.addEventListener('submit', (e) => handleFormSubmit(e, id));
   
   document.querySelector('.modal-header h2').textContent = 'Editar Produto';
@@ -1023,7 +1218,6 @@ function openModal(isEditing = false) {
   const modalOverlay = document.getElementById('modalOverlay');
   modalOverlay.style.display = 'block';
   
-  // Reset form if not editing
   if (!isEditing) {
     document.getElementById('addProductForm').reset();
     document.querySelector('.modal-header h2').textContent = 'Adicionar Novo Produto';
@@ -1035,16 +1229,13 @@ function closeModal() {
   const modalOverlay = document.getElementById('modalOverlay');
   modalOverlay.style.display = 'none';
   
-  // Reset form and its submit handler
   const form = document.getElementById('addProductForm');
   form.reset();
   form.onsubmit = (e) => handleFormSubmit(e);
   
-  // Reset modal title and button text
   document.querySelector('.modal-header h2').textContent = 'Adicionar Novo Produto';
   document.querySelector('.save-btn').textContent = 'Salvar';
   
-  // Remove focus from any active element
   if (document.activeElement) {
     document.activeElement.blur();
   }
@@ -1065,11 +1256,9 @@ function duplicateProduct(id) {
   const product = window.products.find(p => p.id === id);
   if (!product) return;
   
-  // Remove "(Cópia)" from the name if it exists, then add it once
   let newName = product.name.replace(/\s*\(Cópia\)*/g, '');
   newName = `${newName} (Cópia)`;
   
-  // Create new product data without ID
   const duplicatedProduct = {
     name: newName,
     price: product.price,
@@ -1079,7 +1268,6 @@ function duplicateProduct(id) {
     costPrice: product.costPrice
   };
   
-  // Add to database
   database.ref('products').push(duplicatedProduct)
     .then(() => {
       console.log('Product duplicated successfully');
@@ -1127,7 +1315,6 @@ function handleSearch(e) {
     normalizeString(product.name.toLowerCase()).includes(searchTerm)
   );
   
-  // Sort filtered products alphabetically
   filteredProducts.sort((a, b) => a.name.localeCompare(b.name));
   
   const tbody = document.getElementById('productsTableBody');
@@ -1161,61 +1348,11 @@ function normalizeString(str) {
   return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
-// Close modal when clicking outside
 window.onclick = function(event) {
   const modalOverlay = document.getElementById('modalOverlay');
   if (event.target === modalOverlay) {
     closeModal();
   }
-}
-
-window.editSale = undefined;
-
-function updateSalesTable() {
-  const salesTableBody = document.querySelector('.sales-table tbody');
-  if (!salesTableBody) return;
-
-  // Clear existing rows
-  salesTableBody.innerHTML = '';
-
-  // Get sales data from Firebase
-  database.ref('sales').orderByChild('date').once('value')
-    .then((snapshot) => {
-      // Convert the snapshot to an array and reverse it to show newest first
-      const salesArray = [];
-      snapshot.forEach((childSnapshot) => {
-        salesArray.push({
-          id: childSnapshot.key,
-          ...childSnapshot.val()
-        });
-      });
-      
-      // Reverse array to show newest sales first
-      salesArray.reverse().forEach((sale) => {
-        const productsText = sale.products.map(p => 
-          `${p.quantity}x ${p.name}`  
-        ).join(', ');
-
-        const row = `
-          <tr>
-            <td>${sale.date}</td>
-            <td>${sale.time}</td>
-            <td>${productsText}</td>
-            <td data-payment-method>${sale.paymentMethod}</td>
-            <td>R$ ${sale.total.toFixed(2)}</td>
-            <td>
-              <button onclick="deleteSale('${sale.id}')" class="delete-sale-btn" title="Excluir venda">
-                <i class="fas fa-trash"></i>
-              </button>
-            </td>
-          </tr>
-        `;
-        salesTableBody.innerHTML += row;
-      });
-    })
-    .catch((error) => {
-      console.error('Error loading sales:', error);
-    });
 }
 
 function loadCashHistory() {
@@ -1241,10 +1378,8 @@ function loadCashHistory() {
 }
 
 window.deleteCashHistory = function(date) {
-  // Get all sales
   database.ref('sales').once('value')
     .then((snapshot) => {
-      // Get all sales for the specified date and their keys
       const salesToDelete = [];
       snapshot.forEach((childSnapshot) => {
         const sale = childSnapshot.val();
@@ -1253,13 +1388,11 @@ window.deleteCashHistory = function(date) {
         }
       });
       
-      // Create an object with all updates to perform
       const updates = {};
       salesToDelete.forEach((saleKey) => {
         updates[`sales/${saleKey}`] = null;
       });
       
-      // Perform all deletions in one atomic operation
       return database.ref().update(updates);
     })
     .then(() => {
@@ -1273,7 +1406,6 @@ window.deleteCashHistory = function(date) {
 };
 
 function updateCashHistoryTable() {
-  // Get all sales data from Firebase
   database.ref('sales').once('value')
     .then((snapshot) => {
       const salesData = [];
@@ -1281,41 +1413,40 @@ function updateCashHistoryTable() {
         const sale = childSnapshot.val();
         const date = sale.date;
         
-        // Find existing date entry or create new one
         let dateEntry = salesData.find(entry => entry.date === date);
         if (!dateEntry) {
           dateEntry = { date: date, total: 0, profit: 0 };
           salesData.push(dateEntry);
         }
         
-        // Add sale total to date entry
         dateEntry.total += sale.total;
 
-        // Calculate profit for this sale using the products data
         sale.products.forEach(product => {
           const productRef = window.products.find(p => p.name === product.name);
           if (productRef) {
-            const productProfit = (product.unitPrice - productRef.costPrice) * product.quantity;
+            let productProfit = (product.unitPrice - productRef.costPrice) * product.quantity;
+            
+            // Apply card payment fee if payment method is credit or debit
+            if (sale.paymentMethod === 'Cartão de Débito' || sale.paymentMethod === 'Cartão de Crédito') {
+              const cardFee = productProfit * 0.0074; // 0.74% fee
+              productProfit -= cardFee;
+            }
+            
             dateEntry.profit += productProfit;
           }
         });
       });
 
-      // Sort by date (most recent first)
       salesData.sort((a, b) => {
-        // Convert dates to comparable format (assuming date format is DD/MM/YYYY)
         const [aDay, aMonth, aYear] = a.date.split('/').map(Number);
         const [bDay, bMonth, bYear] = b.date.split('/').map(Number);
         
-        // Create Date objects for comparison
         const dateA = new Date(aYear, aMonth - 1, aDay);
         const dateB = new Date(bYear, bMonth - 1, bDay);
         
-        // Sort in descending order (newest first)
         return dateB - dateA;
       });
 
-      // Update the table
       const tbody = document.querySelector('.cash-history-table tbody');
       tbody.innerHTML = salesData.map(entry => `
         <tr>
@@ -1356,19 +1487,15 @@ function loadPaymentMethodTotals() {
 }
 
 function updatePaymentTotalsTable() {
-  // Get current date in DD/MM/YYYY format
   const today = new Date();
-  const currentDate = today.toLocaleDateString('pt-BR'); // Will format as DD/MM/YYYY
+  const currentDate = today.toLocaleDateString('pt-BR'); 
   
-  // Get all sales data from Firebase
   database.ref('sales').once('value')
     .then((snapshot) => {
       const paymentTotals = {};
       
-      // Calculate totals for each payment method for current day only
       snapshot.forEach((childSnapshot) => {
         const sale = childSnapshot.val();
-        // Only process sales from today
         if (sale.date === currentDate) {
           const paymentMethod = sale.paymentMethod;
           const total = sale.total || 0;
@@ -1379,10 +1506,8 @@ function updatePaymentTotalsTable() {
         }
       });
 
-      // Update the table
       const tbody = document.querySelector('.payment-totals-table tbody');
       if (Object.keys(paymentTotals).length === 0) {
-        // If no sales today, show message
         tbody.innerHTML = `
           <tr>
             <td colspan="2">Nenhuma venda registrada hoje</td>
@@ -1397,10 +1522,8 @@ function updatePaymentTotalsTable() {
         `).join('');
       }
       
-      // Update the title to show current date with different format for mobile
       const title = document.querySelector('.payment-totals-title');
       if (title) {
-        // Check if we're on mobile
         const isMobile = window.innerWidth <= 768;
         if (isMobile) {
           title.textContent = `Pagamentos do dia ${currentDate}`;
@@ -1414,7 +1537,6 @@ function updatePaymentTotalsTable() {
     });
 }
 
-// Add resize listener to update title format when window size changes
 window.addEventListener('resize', () => {
   const title = document.querySelector('.payment-totals-title');
   const currentDate = new Date().toLocaleDateString('pt-BR');
@@ -1438,16 +1560,15 @@ window.calculateChange = function(receivedAmount) {
   const totalAmount = parseFloat(grandTotalElement.textContent.replace('R$ ', ''));
   const received = parseFloat(receivedAmount) || 0;
 
-  // Only show message if there's a value entered
   if (receivedAmount.trim() !== '') {
     if (received >= 0) {
       const change = received - totalAmount;
       if (received > totalAmount) {
         changeElement.textContent = `Troco: R$ ${change.toFixed(2)}`;
-        changeElement.style.color = '#27ae60'; // Green color for positive change
+        changeElement.style.color = '#27ae60'; 
       } else {
         changeElement.textContent = 'Digite o valor recebido corretamente';
-        changeElement.style.color = '#e74c3c'; // Red color for warning message
+        changeElement.style.color = '#e74c3c'; 
       }
       changeElement.style.display = 'block';
     } else {
@@ -1457,3 +1578,44 @@ window.calculateChange = function(receivedAmount) {
     changeElement.style.display = 'none';
   }
 };
+
+function generateSaleModalHTML() {
+  return `
+    <div class="modal-overlay" id="saleModalOverlay">
+      <div class="modal">
+        <div class="modal-header">
+          <h2>Nova Venda</h2>
+          <button class="modal-close" onclick="closeSaleModal()">×</button>
+        </div>
+        <div class="modal-content">
+          <div class="sale-form">
+            <div class="product-search-container">
+              <div class="search-wrapper">
+                <input 
+                  type="text" 
+                  class="product-search-input" 
+                  placeholder="Pesquisar produto..."
+                  id="saleProductSearch"
+                >
+                <i class="fas fa-search product-search-icon"></i>
+              </div>
+              <div class="search-results" id="searchResults"></div>
+            </div>
+            <div class="selected-products" id="selectedProducts" style="display: none;">
+              <h3>Produtos Selecionados</h3>
+              <div class="selected-products-list"></div>
+            </div>
+            <div class="sale-form-buttons">
+              <button class="payment-button select-payment">
+                Selecionar forma de pagamento
+              </button>
+              <button class="payment-button close-sale" onclick="closeSaleModal()">
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
