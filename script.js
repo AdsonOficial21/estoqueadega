@@ -414,16 +414,35 @@ window.selectPaymentMethod = function(method) {
       const quantity = parseInt(item.querySelector('input[type="number"]').value);
       const unitPrice = parseFloat(item.querySelector('.unit-price').textContent);
       const total = parseFloat(item.querySelector('.total-value').textContent);
+      const productName = item.querySelector('.product-name').textContent;
+      const product = window.products.find(p => p.name === productName);
+      
+      // Calculate and store profit per product at time of sale
+      let productProfit = (unitPrice - product.costPrice) * quantity;
+      
+      // Apply payment method fees
+      if (method === 'debit') {
+        productProfit *= (1 - 0.0145); // 1.45% fee for debit
+      } else if (method === 'credit') {
+        productProfit *= (1 - 0.0339); // 3.39% fee for credit
+      } else if (method === 'pix') {
+        productProfit *= (1 - 0.0099); // 0.99% fee for pix
+      }
+
       return {
-        name: item.querySelector('.product-name').textContent,
+        name: productName,
         quantity: quantity,
         unitPrice: unitPrice,
-        total: total
+        total: total,
+        profit: productProfit // Store the calculated profit
       };
     }),
     paymentMethod: paymentMethodText,
     total: parseFloat(grandTotal.replace('R$ ', ''))
   };
+
+  // Calculate and store total profit for the sale
+  saleData.totalProfit = saleData.products.reduce((sum, product) => sum + product.profit, 0);
 
   const updatePromises = Array.from(selectedProducts).map(item => {
     const productName = item.querySelector('.product-name').textContent;
@@ -536,9 +555,13 @@ function updateSalesTable(page = 1) {
     .then((snapshot) => {
       const salesArray = [];
       snapshot.forEach((childSnapshot) => {
+        const sale = childSnapshot.val();
+        
+        // Keep profit calculation but it will be hidden in UI
         salesArray.push({
           id: childSnapshot.key,
-          ...childSnapshot.val()
+          ...sale,
+          profit: sale.totalProfit || 0
         });
       });
       
@@ -564,6 +587,7 @@ function updateSalesTable(page = 1) {
             <td>${productsText}</td>
             <td data-payment-method>${sale.paymentMethod}</td>
             <td>R$ ${sale.total.toFixed(2)}</td>
+            <td>R$ ${sale.profit.toFixed(2)}</td>
             <td>
               <button onclick="editSale('${sale.id}')" class="edit-sale-btn" title="Editar venda">
                 <i class="fas fa-edit"></i>
@@ -585,64 +609,7 @@ function updateSalesTable(page = 1) {
     });
 }
 
-// Add this new function for pagination controls
-function updatePagination(currentPage, totalPages) {
-  const salesTable = document.querySelector('.sales-table');
-  let paginationDiv = document.querySelector('.pagination');
-  
-  if (paginationDiv) {
-    paginationDiv.remove();
-  }
-
-  paginationDiv = document.createElement('div');
-  paginationDiv.className = 'pagination';
-  
-  // Only show pagination if there's more than one page
-  if (totalPages > 1) {
-    // Previous button
-    const prevButton = document.createElement('button');
-    prevButton.className = `pagination-btn ${currentPage === 1 ? 'disabled' : ''}`;
-    prevButton.innerHTML = '<i class="fas fa-chevron-left"></i>';
-    prevButton.disabled = currentPage === 1;
-    prevButton.onclick = () => updateSalesTable(currentPage - 1);
-    paginationDiv.appendChild(prevButton);
-
-    // Page numbers
-    for (let i = 1; i <= totalPages; i++) {
-      if (
-        i === 1 || 
-        i === totalPages || 
-        (i >= currentPage - 1 && i <= currentPage + 1)
-      ) {
-        const pageButton = document.createElement('button');
-        pageButton.className = `pagination-btn ${i === currentPage ? 'active' : ''}`;
-        pageButton.textContent = i;
-        pageButton.onclick = () => updateSalesTable(i);
-        paginationDiv.appendChild(pageButton);
-      } else if (
-        i === currentPage - 2 || 
-        i === currentPage + 2
-      ) {
-        const ellipsis = document.createElement('span');
-        ellipsis.textContent = '...';
-        ellipsis.style.color = '#2c3e50';
-        paginationDiv.appendChild(ellipsis);
-      }
-    }
-
-    // Next button
-    const nextButton = document.createElement('button');
-    nextButton.className = `pagination-btn ${currentPage === totalPages ? 'disabled' : ''}`;
-    nextButton.innerHTML = '<i class="fas fa-chevron-right"></i>';
-    nextButton.disabled = currentPage === totalPages;
-    nextButton.onclick = () => updateSalesTable(currentPage + 1);
-    paginationDiv.appendChild(nextButton);
-
-    // Add pagination controls after the table
-    salesTable.parentNode.insertBefore(paginationDiv, salesTable.nextSibling);
-  }
-}
-
+// Add this new function to filter sales by date
 function filterSalesByDate(selectedDate) {
   const salesTableBody = document.querySelector('.sales-table tbody');
   if (!salesTableBody) return;
@@ -655,9 +622,30 @@ function filterSalesByDate(selectedDate) {
       snapshot.forEach((childSnapshot) => {
         const sale = childSnapshot.val();
         if (sale.date === selectedDate) {
+          // Calculate profit for each sale
+          let saleProfit = 0;
+          sale.products.forEach(product => {
+            const productRef = window.products.find(p => p.name === product.name);
+            if (productRef) {
+              let productProfit = (product.unitPrice - productRef.costPrice) * product.quantity;
+              
+              // Apply payment method fees
+              if (sale.paymentMethod === 'Cartão de Débito') {
+                productProfit -= (productProfit * 0.0145); // 1.45% fee
+              } else if (sale.paymentMethod === 'Cartão de Crédito') {
+                productProfit -= (productProfit * 0.0339); // 3.39% fee
+              } else if (sale.paymentMethod === 'Pix') {
+                productProfit -= (productProfit * 0.0099); // 0.99% fee
+              }
+              
+              saleProfit += productProfit;
+            }
+          });
+
           salesArray.push({
             id: childSnapshot.key,
-            ...sale
+            ...sale,
+            profit: saleProfit
           });
         }
       });
@@ -683,6 +671,7 @@ function filterSalesByDate(selectedDate) {
             <td>${productsText}</td>
             <td data-payment-method>${sale.paymentMethod}</td>
             <td>R$ ${sale.total.toFixed(2)}</td>
+            <td>R$ ${sale.profit.toFixed(2)}</td>
             <td>
               <button onclick="editSale('${sale.id}')" class="edit-sale-btn" title="Editar venda">
                 <i class="fas fa-edit"></i>
@@ -700,63 +689,6 @@ function filterSalesByDate(selectedDate) {
       console.error('Error loading sales:', error);
     });
 }
-
-window.editSale = function(saleId) {
-  database.ref('sales/' + saleId).once('value')
-    .then((snapshot) => {
-      const sale = snapshot.val();
-      if (!sale) return;
-      
-      openSaleModal();
-
-      document.querySelector('.modal').dataset.originalTime = sale.time;
-
-      const selectedProductsList = document.querySelector('.selected-products-list');
-      const selectedProductsSection = document.getElementById('selectedProducts');
-      const saleFormButtons = document.querySelector('.sale-form-buttons');
-
-      selectedProductsSection.style.display = 'block';
-      saleFormButtons.style.display = 'flex';
-
-      sale.products.forEach(product => {
-        selectedProductsList.innerHTML += `
-          <div class="selected-product-item" data-product-id="${product.id || 'legacy'}">
-            <div class="selected-product-info">
-              <img src="${product.image || window.products.find(p => p.name === product.name)?.image || 'placeholder.png'}" 
-                   alt="${product.name}" class="selected-product-image">
-              <span class="product-name">${product.name}</span>
-              <span class="separator">|</span>
-              <span class="product-price">
-                R$ <span class="unit-price">${product.unitPrice.toFixed(2)}</span>
-              </span>
-              <span class="separator">|</span>
-              <span class="quantity-label">Quantidade: </span>
-              <input type="number" value="${product.quantity}" min="1" 
-                     oninput="updateQuantityRealTime('${product.id || 'legacy'}', this.value)"
-                     onfocus="this.select()">
-              <span class="separator">|</span>
-              <span class="total-price">
-                Total: R$ <span class="total-value">${(product.unitPrice * product.quantity).toFixed(2)}</span>
-              </span>
-            </div>
-            <button class="remove-product" onclick="removeSelectedProduct('${product.id || 'legacy'}')">
-              <i class="fas fa-times"></i>
-            </button>
-          </div>
-        `;
-      });
-
-      updateGrandTotal();
-
-      document.querySelector('.modal-header h2').textContent = 'Editar Venda';
-
-      document.querySelector('.modal').dataset.editingSaleId = saleId;
-    })
-    .catch((error) => {
-      console.error('Error loading sale for editing:', error);
-      alert('Erro ao carregar venda para edição. Por favor, tente novamente.');
-    });
-};
 
 function loadSalesTable() {
   const content = document.querySelector('.content');
@@ -784,6 +716,7 @@ function loadSalesTable() {
           <th>Produtos</th>
           <th>Forma de Pagamento</th>
           <th>Total</th>
+          <th>Lucro</th>
           <th>Ações</th>
         </tr>
       </thead>
@@ -1420,23 +1353,11 @@ function updateCashHistoryTable() {
         }
         
         dateEntry.total += sale.total;
-
-        sale.products.forEach(product => {
-          const productRef = window.products.find(p => p.name === product.name);
-          if (productRef) {
-            let productProfit = (product.unitPrice - productRef.costPrice) * product.quantity;
-            
-            // Apply card payment fee if payment method is credit or debit
-            if (sale.paymentMethod === 'Cartão de Débito' || sale.paymentMethod === 'Cartão de Crédito') {
-              const cardFee = productProfit * 0.0074; // 0.74% fee
-              productProfit -= cardFee;
-            }
-            
-            dateEntry.profit += productProfit;
-          }
-        });
+        // Use the stored totalProfit from the sale instead of recalculating
+        dateEntry.profit += sale.totalProfit || 0;
       });
 
+      // Sort the data by date (most recent first)
       salesData.sort((a, b) => {
         const [aDay, aMonth, aYear] = a.date.split('/').map(Number);
         const [bDay, bMonth, bYear] = b.date.split('/').map(Number);
@@ -1619,3 +1540,117 @@ function generateSaleModalHTML() {
     </div>
   `;
 }
+
+function updatePagination(currentPage, totalPages) {
+  const salesTable = document.querySelector('.sales-table');
+  let paginationDiv = document.querySelector('.pagination');
+  
+  if (paginationDiv) {
+    paginationDiv.remove();
+  }
+
+  paginationDiv = document.createElement('div');
+  paginationDiv.className = 'pagination';
+  
+  // Only show pagination if there's more than one page
+  if (totalPages > 1) {
+    // Previous button
+    const prevButton = document.createElement('button');
+    prevButton.className = `pagination-btn ${currentPage === 1 ? 'disabled' : ''}`;
+    prevButton.innerHTML = '<i class="fas fa-chevron-left"></i>';
+    prevButton.disabled = currentPage === 1;
+    prevButton.onclick = () => updateSalesTable(currentPage - 1);
+    paginationDiv.appendChild(prevButton);
+
+    // Page numbers
+    for (let i = 1; i <= totalPages; i++) {
+      if (
+        i === 1 || 
+        i === totalPages || 
+        (i >= currentPage - 1 && i <= currentPage + 1)
+      ) {
+        const pageButton = document.createElement('button');
+        pageButton.className = `pagination-btn ${i === currentPage ? 'active' : ''}`;
+        pageButton.textContent = i;
+        pageButton.onclick = () => updateSalesTable(i);
+        paginationDiv.appendChild(pageButton);
+      } else if (
+        i === currentPage - 2 || 
+        i === currentPage + 2
+      ) {
+        const ellipsis = document.createElement('span');
+        ellipsis.textContent = '...';
+        ellipsis.style.color = '#2c3e50';
+        paginationDiv.appendChild(ellipsis);
+      }
+    }
+
+    // Next button
+    const nextButton = document.createElement('button');
+    nextButton.className = `pagination-btn ${currentPage === totalPages ? 'disabled' : ''}`;
+    nextButton.innerHTML = '<i class="fas fa-chevron-right"></i>';
+    nextButton.disabled = currentPage === totalPages;
+    nextButton.onclick = () => updateSalesTable(currentPage + 1);
+    paginationDiv.appendChild(nextButton);
+
+    // Add pagination controls after the table
+    salesTable.parentNode.insertBefore(paginationDiv, salesTable.nextSibling);
+  }
+}
+
+window.editSale = function(saleId) {
+  database.ref('sales/' + saleId).once('value')
+    .then((snapshot) => {
+      const sale = snapshot.val();
+      if (!sale) return;
+      
+      openSaleModal();
+
+      document.querySelector('.modal').dataset.originalTime = sale.time;
+
+      const selectedProductsList = document.querySelector('.selected-products-list');
+      const selectedProductsSection = document.getElementById('selectedProducts');
+      const saleFormButtons = document.querySelector('.sale-form-buttons');
+
+      selectedProductsSection.style.display = 'block';
+      saleFormButtons.style.display = 'flex';
+
+      sale.products.forEach(product => {
+        selectedProductsList.innerHTML += `
+          <div class="selected-product-item" data-product-id="${product.id || 'legacy'}">
+            <div class="selected-product-info">
+              <img src="${product.image || window.products.find(p => p.name === product.name)?.image || 'placeholder.png'}" 
+                   alt="${product.name}" class="selected-product-image">
+              <span class="product-name">${product.name}</span>
+              <span class="separator">|</span>
+              <span class="product-price">
+                R$ <span class="unit-price">${product.unitPrice.toFixed(2)}</span>
+              </span>
+              <span class="separator">|</span>
+              <span class="quantity-label">Quantidade: </span>
+              <input type="number" value="${product.quantity}" min="1" 
+                     oninput="updateQuantityRealTime('${product.id || 'legacy'}', this.value)"
+                     onfocus="this.select()">
+              <span class="separator">|</span>
+              <span class="total-price">
+                Total: R$ <span class="total-value">${(product.unitPrice * product.quantity).toFixed(2)}</span>
+              </span>
+            </div>
+            <button class="remove-product" onclick="removeSelectedProduct('${product.id || 'legacy'}')">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+        `;
+      });
+
+      updateGrandTotal();
+
+      document.querySelector('.modal-header h2').textContent = 'Editar Venda';
+
+      document.querySelector('.modal').dataset.editingSaleId = saleId;
+    })
+    .catch((error) => {
+      console.error('Error loading sale for editing:', error);
+      alert('Erro ao carregar venda para edição. Por favor, tente novamente.');
+    });
+};

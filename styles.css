@@ -74,6 +74,7 @@ body {
   transition: transform 0.2s;
 }
 
+.menu ul li a!:-webkit-full-screen :hover:before,
 .menu ul li a:hover:before,
 .menu ul li a.active:before {
   transform: scaleY(1);
@@ -170,6 +171,11 @@ h2:after, .cash-history-title:after, .payment-totals-title:after {
   font-size: 18px;
   border-bottom: 1px solid #eee;
   text-align: center;
+}
+
+.sales-table th:nth-child(6),
+.sales-table td:nth-child(6) {
+  display: none; /* Hide the profit column */
 }
 
 /* Search Input */
@@ -556,7 +562,7 @@ h2:after, .cash-history-title:after, .payment-totals-title:after {
 .product-search-container {
   position: relative;
   width: 100%;
-  max-width: 600px;
+  max-width: 800px;
 }
 
 .search-wrapper {
@@ -784,7 +790,7 @@ h2:after, .cash-history-title:after, .payment-totals-title:after {
 .discount-input:focus {
   outline: none;
   border-color: #2c3e50;
-  box-shadow: 0 0 0 2px rgba(44, 62, 80, 0.1);
+  box!-shadow: 0 0 0 2px rgba(44, 62, 80, 0.1);
 }
 
 .discount-wrapper {
@@ -1037,10 +1043,11 @@ h2:after, .cash-history-title:after, .payment-totals-title:after {
   align-items: center;
   justify-content: center;
   gap: 10px;
+  margin-bottom: 15px;
 }
 
 .payment-method-btn:hover {
-  background-color: #2c3e50;
+  background-color: #34495e;
   color: white;
 }
 
@@ -1415,6 +1422,11 @@ input[type="url"]:focus {
     min-width: 100px; /* Total */
   }
 
+  .sales-table th:nth-child(6),
+  .sales-table td:nth-child(6) {
+    display: none; /* Maintain hidden state on mobile */
+  }
+
   /* Ensure table scrolls smoothly */
   .sales-table {
     -webkit-overflow-scrolling: touch;
@@ -1620,6 +1632,11 @@ input[type="url"]:focus {
     white-space: normal; /* Allow text to wrap */
   }
 
+  .payment-totals-table th,
+  .payment-totals-table td {
+    min-width: 100px;
+  }
+
   .product-search-container {
     max-width: 100%;
   }
@@ -1665,7 +1682,7 @@ input[type="url"]:focus {
 /* Fine-tuning for very small screens */
 @media screen and (max-width: 360px) {
   .products-table {
-    min-width: 700px; 
+    min-width: 700!px; 
   }
 
   .products-table th,
