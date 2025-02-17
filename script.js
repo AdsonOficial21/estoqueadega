@@ -557,7 +557,6 @@ function updateSalesTable(page = 1) {
       snapshot.forEach((childSnapshot) => {
         const sale = childSnapshot.val();
         
-        // Keep profit calculation but it will be hidden in UI
         salesArray.push({
           id: childSnapshot.key,
           ...sale,
@@ -565,7 +564,20 @@ function updateSalesTable(page = 1) {
         });
       });
       
-      salesArray.reverse();
+      // Sort by date and time in reverse chronological order
+      salesArray.sort((a, b) => {
+        const [aDay, aMonth, aYear] = a.date.split('/').map(Number);
+        const [bDay, bMonth, bYear] = b.date.split('/').map(Number);
+        
+        // Create Date objects with time
+        const [aHour, aMinute, aSecond] = (a.time || '00:00:00').split(':').map(Number);
+        const [bHour, bMinute, bSecond] = (b.time || '00:00:00').split(':').map(Number);
+        
+        const dateA = new Date(aYear, aMonth - 1, aDay, aHour, aMinute, aSecond);
+        const dateB = new Date(bYear, bMonth - 1, bDay, bHour, bMinute, bSecond);
+        
+        return dateB - dateA; // Most recent dates first
+      });
 
       // Calculate pagination
       const totalSales = salesArray.length;
@@ -622,26 +634,7 @@ function filterSalesByDate(selectedDate) {
       snapshot.forEach((childSnapshot) => {
         const sale = childSnapshot.val();
         if (sale.date === selectedDate) {
-          // Calculate profit for each sale
-          let saleProfit = 0;
-          sale.products.forEach(product => {
-            const productRef = window.products.find(p => p.name === product.name);
-            if (productRef) {
-              let productProfit = (product.unitPrice - productRef.costPrice) * product.quantity;
-              
-              // Apply payment method fees
-              if (sale.paymentMethod === 'Cartão de Débito') {
-                productProfit -= (productProfit * 0.0145); // 1.45% fee
-              } else if (sale.paymentMethod === 'Cartão de Crédito') {
-                productProfit -= (productProfit * 0.0339); // 3.39% fee
-              } else if (sale.paymentMethod === 'Pix') {
-                productProfit -= (productProfit * 0.0099); // 0.99% fee
-              }
-              
-              saleProfit += productProfit;
-            }
-          });
-
+          let saleProfit = sale.totalProfit || 0;
           salesArray.push({
             id: childSnapshot.key,
             ...sale,
@@ -652,38 +645,60 @@ function filterSalesByDate(selectedDate) {
       
       salesArray.reverse();
 
-      // Remove existing pagination if it exists
-      const existingPagination = document.querySelector('.pagination');
-      if (existingPagination) {
-        existingPagination.remove();
+      // Remove existing no-sales message if it exists
+      const existingMessage = document.querySelector('.no-sales-message');
+      if (existingMessage) {
+        existingMessage.remove();
       }
 
-      // Display all filtered sales without pagination
-      salesArray.forEach((sale) => {
-        const productsText = sale.products.map(p => 
-          `${p.quantity}x ${p.name}`  
-        ).join(', ');
+      if (salesArray.length === 0) {
+        // Only show no sales message if a date is actually selected
+        const datePicker = document.getElementById('datePicker');
+        const isCalendarOpen = datePicker && datePicker.classList.contains('filter-active');
+        
+        if (isCalendarOpen) {
+          const noSalesMessage = document.createElement('div');
+          noSalesMessage.className = 'no-sales-message';
+          noSalesMessage.innerHTML = `
+            <i class="fas fa-calendar-times"></i>
+            Nenhuma venda realizada em ${selectedDate}
+          `;
+          salesTableBody.parentElement.insertAdjacentElement('afterend', noSalesMessage);
+        }
+      } else {
+        // Display filtered sales without pagination
+        salesArray.forEach((sale) => {
+          const productsText = sale.products.map(p => 
+            `${p.quantity}x ${p.name}`  
+          ).join(', ');
 
-        const row = `
-          <tr>
-            <td>${sale.date}</td>
-            <td>${sale.time}</td>
-            <td>${productsText}</td>
-            <td data-payment-method>${sale.paymentMethod}</td>
-            <td>R$ ${sale.total.toFixed(2)}</td>
-            <td>R$ ${sale.profit.toFixed(2)}</td>
-            <td>
-              <button onclick="editSale('${sale.id}')" class="edit-sale-btn" title="Editar venda">
-                <i class="fas fa-edit"></i>
-              </button>
-              <button onclick="deleteSale('${sale.id}')" class="delete-sale-btn" title="Excluir venda">
-                <i class="fas fa-trash"></i>
-              </button>
-            </td>
-          </tr>
-        `;
-        salesTableBody.innerHTML += row;
-      });
+          const row = `
+            <tr>
+              <td>${sale.date}</td>
+              <td>${sale.time}</td>
+              <td>${productsText}</td>
+              <td data-payment-method>${sale.paymentMethod}</td>
+              <td>R$ ${sale.total.toFixed(2)}</td>
+              <td>R$ ${sale.profit.toFixed(2)}</td>
+              <td>
+                <button onclick="editSale('${sale.id}')" class="edit-sale-btn" title="Editar venda">
+                  <i class="fas fa-edit"></i>
+                </button>
+                <button onclick="deleteSale('${sale.id}')" class="delete-sale-btn" title="Excluir venda">
+                  <i class="fas fa-trash"></i>
+                </button>
+              </td>
+            </tr>
+          `;
+          salesTableBody.innerHTML += row;
+        });
+
+        // Remove any existing pagination
+        const existingPagination = document.querySelector('.pagination');
+        if (existingPagination) {
+          existingPagination.remove();
+        }
+      }
     })
     .catch((error) => {
       console.error('Error loading sales:', error);
@@ -827,6 +842,9 @@ document.addEventListener('DOMContentLoaded', function() {
   const salesLink = document.querySelector('a[href="https://example.com/vendas"]');
   const movimentacoesLink = document.querySelector('a[href="https://example.com/movimentacoes"]');
   const cashLink = document.querySelector('a[href="https://example.com/caixa"]');
+  const receitaLink = document.querySelector('a[href="https://example.com/receita"]');
+  const relatorioLink = document.querySelector('a[href="https://example.com/relatorio"]');
+  const stockLink = document.querySelector('a[href="https://example.com/estoque"]');
   
   productsLink.addEventListener('click', function(e) {
     e.preventDefault();
@@ -863,9 +881,39 @@ document.addEventListener('DOMContentLoaded', function() {
       this.classList.add('active');
     });
   }
+
+  if (receitaLink) {
+    receitaLink.addEventListener('click', function(e) {
+      e.preventDefault();
+      loadReceita();
+      
+      document.querySelectorAll('.menu a').forEach(a => a.classList.remove('active'));
+      this.classList.add('active');
+    });
+  }
+
+  if (relatorioLink) {
+    relatorioLink.addEventListener('click', function(e) {
+      e.preventDefault();
+      loadProductReport();
+      
+      document.querySelectorAll('.menu a').forEach(a => a.classList.remove('active'));
+      this.classList.add('active');
+    });
+  }
+
+  if (stockLink) {
+    stockLink.addEventListener('click', function(e) {
+      e.preventDefault();
+      loadStock();
+      
+      document.querySelectorAll('.menu a').forEach(a => a.classList.remove('active'));
+      this.classList.add('active');
+    });
+  }
   
   loadSalesTable();
-  
+
   document.addEventListener('keydown', function(event) {
     if (event.key === 'Escape') {
       const saleModal = document.getElementById('saleModalOverlay');
@@ -957,7 +1005,27 @@ function loadProductsFromFirebase() {
     if (productsTable) {
       productsTable.innerHTML = renderProductsTable();
     }
+    
+    updateStockNotification();
   });
+}
+
+// Add this new function to check and update stock notifications
+function updateStockNotification() {
+  const lowStockProducts = window.products.filter(product => 
+    product.quantity >= 0 && 
+    product.quantity <= 5 && 
+    product.priority === true // Only count products with priority checked
+  );
+  
+  const notification = document.getElementById('stockNotification');
+  
+  if (lowStockProducts.length > 0) {
+    notification.style.display = 'flex';
+    notification.textContent = lowStockProducts.length;
+  } else {
+    notification.style.display = 'none';
+  }
 }
 
 function loadProductsTable() {
@@ -1145,6 +1213,12 @@ function editProduct(id) {
   
   document.querySelector('.modal-header h2').textContent = 'Editar Produto';
   document.querySelector('.save-btn').textContent = 'Atualizar';
+
+  // Scroll modal content to top
+  const modalContent = document.querySelector('.modal-content');
+  if (modalContent) {
+    modalContent.scrollTop = 0;
+  }
 }
 
 function openModal(isEditing = false) {
@@ -1166,12 +1240,21 @@ function closeModal() {
   form.reset();
   form.onsubmit = (e) => handleFormSubmit(e);
   
+  // Clear the search input when closing the modal
+  const searchInput = document.querySelector('.search-input');
+  if (searchInput) {
+    searchInput.value = '';
+  }
+  
   document.querySelector('.modal-header h2').textContent = 'Adicionar Novo Produto';
   document.querySelector('.save-btn').textContent = 'Salvar';
   
   if (document.activeElement) {
     document.activeElement.blur();
   }
+  
+  // Trigger the search function to reset the table view
+  handleSearch({ target: { value: '' } });
 }
 
 function deleteProduct(id) {
@@ -1291,7 +1374,12 @@ window.onclick = function(event) {
 function loadCashHistory() {
   const content = document.querySelector('.content');
   content.innerHTML = `
-    <h2 class="cash-history-title">Histórico de Caixa</h2>
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <h2 class="cash-history-title">Histórico de Caixa</h2>
+      <button onclick="openTrashModal()" class="trash-icon-btn" title="Histórico Excluído">
+        <i class="fas fa-trash-alt"></i>
+      </button>
+    </div>
     <table class="cash-history-table">
       <thead>
         <tr>
@@ -1305,38 +1393,188 @@ function loadCashHistory() {
         <!-- Cash history data will be loaded here -->
       </tbody>
     </table>
+
+    <!-- Add Trash Modal -->
+    <div id="trashModal" class="trash-modal">
+      <div class="trash-modal-content">
+        <div class="trash-modal-header">
+          <h2>Histórico Excluído</h2>
+          <button class="modal-close" onclick="closeTrashModal()">×</button>
+        </div>
+        <div class="trash-history-container">
+          <!-- Deleted history will be loaded here -->
+        </div>
+      </div>
+    </div>
   `;
 
   updateCashHistoryTable();
 }
 
 window.deleteCashHistory = function(date) {
-  database.ref('sales').once('value')
+  if (confirm('Tem certeza que deseja mover este histórico para a lixeira?')) {
+    database.ref('sales').once('value')
+      .then((snapshot) => {
+        const salesToMove = [];
+        snapshot.forEach((childSnapshot) => {
+          const sale = childSnapshot.val();
+          if (sale.date === date) {
+            salesToMove.push({
+              id: childSnapshot.key,
+              ...sale,
+              deletedAt: new Date().toISOString()
+            });
+          }
+        });
+        
+        // Move to trash first
+        const trashUpdates = {};
+        salesToMove.forEach((sale) => {
+          trashUpdates[`trash/sales/${sale.id}`] = sale;
+        });
+        
+        // Then delete from main sales
+        const salesUpdates = {};
+        salesToMove.forEach((sale) => {
+          salesUpdates[`sales/${sale.id}`] = null;
+        });
+        
+        // Execute both operations
+        return database.ref().update({
+          ...trashUpdates,
+          ...salesUpdates
+        });
+      })
+      .then(() => {
+        console.log('Cash history moved to trash successfully');
+        updateCashHistoryTable();
+      })
+      .catch((error) => {
+        console.error('Error moving cash history to trash:', error);
+        alert('Erro ao mover histórico para lixeira. Por favor, tente novamente.');
+      });
+  }
+};
+
+window.openTrashModal = function() {
+  const modal = document.getElementById('trashModal');
+  modal.style.display = 'block';
+  loadTrashHistory();
+};
+
+window.closeTrashModal = function() {
+  const modal = document.getElementById('trashModal');
+  modal.style.display = 'none';
+};
+
+window.restoreFromTrash = function(date) {
+  if (confirm('Deseja restaurar este histórico?')) {
+    database.ref('trash/sales').once('value')
+      .then((snapshot) => {
+        const salesToRestore = [];
+        snapshot.forEach((childSnapshot) => {
+          const sale = childSnapshot.val();
+          if (sale.date === date) {
+            salesToRestore.push({
+              id: childSnapshot.key,
+              ...sale
+            });
+          }
+        });
+        
+        // Remove deletedAt and restore to main sales
+        const updates = {};
+        salesToRestore.forEach((sale) => {
+          const { deletedAt, ...cleanSale } = sale;
+          updates[`sales/${sale.id}`] = cleanSale;
+          updates[`trash/sales/${sale.id}`] = null;
+        });
+        
+        return database.ref().update(updates);
+      })
+      .then(() => {
+        console.log('History restored successfully');
+        updateCashHistoryTable();
+        loadTrashHistory();
+      })
+      .catch((error) => {
+        console.error('Error restoring history:', error);
+        alert('Erro ao restaurar histórico. Por favor, tente novamente.');
+      });
+  }
+};
+
+function loadTrashHistory() {
+  const container = document.querySelector('.trash-history-container');
+  
+  database.ref('trash/sales').once('value')
     .then((snapshot) => {
-      const salesToDelete = [];
+      const trashedData = {};
+      
       snapshot.forEach((childSnapshot) => {
         const sale = childSnapshot.val();
-        if (sale.date === date) {
-          salesToDelete.push(childSnapshot.key);
+        const date = sale.date;
+        
+        if (!trashedData[date]) {
+          trashedData[date] = {
+            total: 0,
+            profit: 0,
+            deletedAt: sale.deletedAt
+          };
         }
+        
+        trashedData[date].total += sale.total;
+        trashedData[date].profit += sale.totalProfit || 0;
       });
       
-      const updates = {};
-      salesToDelete.forEach((saleKey) => {
-        updates[`sales/${saleKey}`] = null;
-      });
+      // Convert to array and sort by deletedAt (most recent first)
+      const sortedTrash = Object.entries(trashedData)
+        .sort(([, a], [, b]) => new Date(b.deletedAt) - new Date(a.deletedAt));
       
-      return database.ref().update(updates);
+      if (sortedTrash.length === 0) {
+        container.innerHTML = `
+          <div class="no-trash-message">
+            <i class="fas fa-trash-alt"></i>
+            Nenhum histórico na lixeira
+          </div>
+        `;
+        return;
+      }
+      
+      container.innerHTML = `
+        <table class="trash-history-table">
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Total</th>
+              <th>Lucro</th>
+              <th>Excluído em</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${sortedTrash.map(([date, data]) => `
+              <tr>
+                <td>${date}</td>
+                <td>R$ ${data.total.toFixed(2)}</td>
+                <td>R$ ${data.profit.toFixed(2)}</td>
+                <td>${new Date(data.deletedAt).toLocaleDateString('pt-BR')} ${new Date(data.deletedAt).toLocaleTimeString('pt-BR')}</td>
+                <td>
+                  <button onclick="restoreFromTrash('${date}')" class="restore-btn" title="Restaurar">
+                    <i class="fas fa-undo"></i>
+                  </button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
     })
-    .then(() => {
-      console.log('Cash history deleted successfully');
-      updateCashHistoryTable();
-    })
-    .catch((error) => {
-      console.error('Error deleting cash history:', error);
-      alert('Erro ao excluir histórico. Por favor, tente novamente.');
+    .catch(error => {
+      console.error('Error loading trash history:', error);
+      container.innerHTML = '<p>Erro ao carregar histórico da lixeira</p>';
     });
-};
+}
 
 function updateCashHistoryTable() {
   database.ref('sales').once('value')
@@ -1500,45 +1738,213 @@ window.calculateChange = function(receivedAmount) {
   }
 };
 
-function generateSaleModalHTML() {
-  return `
-    <div class="modal-overlay" id="saleModalOverlay">
-      <div class="modal">
-        <div class="modal-header">
-          <h2>Nova Venda</h2>
-          <button class="modal-close" onclick="closeSaleModal()">×</button>
-        </div>
-        <div class="modal-content">
-          <div class="sale-form">
-            <div class="product-search-container">
-              <div class="search-wrapper">
-                <input 
-                  type="text" 
-                  class="product-search-input" 
-                  placeholder="Pesquisar produto..."
-                  id="saleProductSearch"
-                >
-                <i class="fas fa-search product-search-icon"></i>
-              </div>
-              <div class="search-results" id="searchResults"></div>
+function loadReceita() {
+  const content = document.querySelector('.content');
+  const startYear = 2025;
+  const yearOptions = Array.from({length: 6}, (_, i) => startYear + i);
+  const months = [
+    'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+  ];
+  
+  content.innerHTML = `
+    <h2 class="receita-title">Receita Total</h2>
+    <div class="date-filter">
+      <select id="yearFilter">
+        ${yearOptions.map(year => 
+          `<option value="${year}">${year}</option>`
+        ).join('')}
+      </select>
+      <select id="receitaFilter">
+        <option value="all" selected>Todo Período</option>
+        <option value="day">Por Dia</option>
+        <option value="week">Por Semana</option>
+        <option value="month">Por Mês</option>
+      </select>
+      <div id="monthSelector" style="display: none;">
+        <select id="monthNumber">
+          ${months.map((month, index) => 
+            `<option value="${index}">${month}</option>`
+          ).join('')}
+        </select>
+      </div>
+      <div id="weekSelector" style="display: none;">
+        <select id="weekNumber">
+          <option value="1">Semana 1 (1-7)</option>
+          <option value="2">Semana 2 (8-14)</option>
+          <option value="3">Semana 3 (15-21)</option>
+          <option value="4">Semana 4 (22-31)</option>
+        </select>
+      </div>
+      <div id="daySelector" style="display: none;">
+        <select id="dayNumber">
+          ${Array.from({length: 31}, (_, i) => 
+            `<option value="${i + 1}">Dia ${i + 1}</option>`
+          ).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="receita-container">
+      <!-- Receita content will be loaded here -->
+    </div>
+  `;
+
+  // Add event listeners for filters
+  const receitaFilter = document.getElementById('receitaFilter');
+  const weekSelector = document.getElementById('weekSelector');
+  const daySelector = document.getElementById('daySelector');
+  const monthSelector = document.getElementById('monthSelector');
+  const weekNumber = document.getElementById('weekNumber');
+  const dayNumber = document.getElementById('dayNumber');
+  const monthNumber = document.getElementById('monthNumber');
+  const yearFilter = document.getElementById('yearFilter');
+
+  receitaFilter.addEventListener('change', (e) => {
+    weekSelector.style.display = 'none';
+    daySelector.style.display = 'none';
+    monthSelector.style.display = 'none';
+    
+    if (e.target.value === 'week') {
+      weekSelector.style.display = 'block';
+      updateReceita('week', weekNumber.value, yearFilter.value);
+    } else if (e.target.value === 'day') {
+      daySelector.style.display = 'block';
+      updateReceita('day', dayNumber.value, yearFilter.value);
+    } else if (e.target.value === 'month') {
+      monthSelector.style.display = 'block';
+      updateReceita('month', monthNumber.value, yearFilter.value);
+    } else {
+      updateReceita(e.target.value, null, yearFilter.value);
+    }
+  });
+
+  weekNumber.addEventListener('change', (e) => {
+    updateReceita('week', e.target.value, yearFilter.value);
+  });
+
+  dayNumber.addEventListener('change', (e) => {
+    updateReceita('day', e.target.value, yearFilter.value);
+  });
+
+  monthNumber.addEventListener('change', (e) => {
+    updateReceita('month', e.target.value, yearFilter.value);
+  });
+
+  yearFilter.addEventListener('change', () => {
+    const filterValue = receitaFilter.value;
+    if (filterValue === 'week') {
+      updateReceita('week', weekNumber.value, yearFilter.value);
+    } else if (filterValue === 'day') {
+      updateReceita('day', dayNumber.value, yearFilter.value);
+    } else if (filterValue === 'month') {
+      updateReceita('month', monthNumber.value, yearFilter.value);
+    } else {
+      updateReceita(filterValue, null, yearFilter.value);
+    }
+  });
+
+  // Initial load with 'all' filter
+  updateReceita('all', null, startYear.toString());
+}
+
+function updateReceita(filterType = 'all', filterValue = null, selectedYear = new Date().getFullYear().toString()) {
+  database.ref('sales').once('value')
+    .then((snapshot) => {
+      let totalRevenue = 0;
+      let totalProfit = 0;
+      const now = new Date();
+      const today = now.toLocaleDateString('pt-BR');
+
+      snapshot.forEach((childSnapshot) => {
+        const sale = childSnapshot.val();
+        const [day, month, year] = sale.date.split('/').map(Number);
+        const saleDate = new Date(year, month - 1, day);
+        
+        // Only process sales from selected year
+        if (year.toString() !== selectedYear) return;
+        
+        let includeRecord = false;
+
+        switch(filterType) {
+          case 'day':
+            if (filterValue) {
+              // When specific day is selected
+              includeRecord = day === parseInt(filterValue) &&
+                            saleDate.getMonth() === now.getMonth() &&
+                            saleDate.getFullYear() === parseInt(selectedYear);
+            } else {
+              // Today's sales
+              includeRecord = sale.date === today;
+            }
+            break;
+          case 'week':
+            const weekOfMonth = Math.ceil(day / 7);
+            includeRecord = weekOfMonth === parseInt(filterValue) && 
+                          saleDate.getMonth() === now.getMonth() && 
+                          saleDate.getFullYear() === parseInt(selectedYear);
+            break;
+          case 'month':
+            includeRecord = saleDate.getMonth() === parseInt(filterValue) && 
+                          saleDate.getFullYear() === parseInt(selectedYear);
+            break;
+          case 'all':
+            includeRecord = true;
+            break;
+        }
+
+        if (includeRecord) {
+          totalRevenue += sale.total || 0;
+          totalProfit += sale.totalProfit || 0;
+        }
+      });
+
+      const receitaContainer = document.querySelector('.receita-container');
+      receitaContainer.innerHTML = `
+        <div class="receita-card">
+          <div class="receita-item">
+            <i class="fas fa-money-bill-wave"></i>
+            <div class="receita-info">
+              <h3>Receita Bruta</h3>
+              <p>R$ ${totalRevenue.toFixed(2)}</p>
             </div>
-            <div class="selected-products" id="selectedProducts" style="display: none;">
-              <h3>Produtos Selecionados</h3>
-              <div class="selected-products-list"></div>
-            </div>
-            <div class="sale-form-buttons">
-              <button class="payment-button select-payment">
-                Selecionar forma de pagamento
-              </button>
-              <button class="payment-button close-sale" onclick="closeSaleModal()">
-                Fechar
-              </button>
+          </div>
+          <div class="receita-item">
+            <i class="fas fa-chart-line"></i>
+            <div class="receita-info">
+              <h3>Lucro Total</h3>
+              <p>R$ ${totalProfit.toFixed(2)}</p>
             </div>
           </div>
         </div>
-      </div>
-    </div>
-  `;
+      `;
+    })
+    .catch(error => {
+      console.error('Error loading revenue:', error);
+    });
+}
+
+// Helper functions for date comparison
+function isSameDay(date1, date2) {
+  return date1.getDate() === date2.getDate() &&
+         date1.getMonth() === date2.getMonth() &&
+         date1.getFullYear() === date2.getFullYear();
+}
+
+function isThisWeek(date1, date2) {
+  const oneDay = 24 * 60 * 60 * 1000;
+  const diffDays = Math.round(Math.abs((date2 - date1) / oneDay));
+  const d1 = new Date(date1);
+  const d2 = new Date(date2);
+  return diffDays <= 7 && d1.getDay() <= d2.getDay();
+}
+
+function isSameMonth(date1, date2) {
+  return date1.getMonth() === date2.getMonth() &&
+         date1.getFullYear() === date2.getFullYear();
+}
+
+function isSameYear(date1, date2) {
+  return date1.getFullYear() === date2.getFullYear();
 }
 
 function updatePagination(currentPage, totalPages) {
@@ -1654,3 +2060,204 @@ window.editSale = function(saleId) {
       alert('Erro ao carregar venda para edição. Por favor, tente novamente.');
     });
 };
+
+function generateSaleModalHTML() {
+  return `
+    <div class="modal-overlay" id="saleModalOverlay">
+      <div class="modal">
+        <div class="modal-header">
+          <h2>Nova Venda</h2>
+          <button class="modal-close" onclick="closeSaleModal()">×</button>
+        </div>
+        <div class="modal-content">
+          <div class="sale-form">
+            <div class="product-search-container">
+              <div class="search-wrapper">
+                <input 
+                  type="text" 
+                  class="product-search-input" 
+                  placeholder="Pesquisar produto..."
+                  id="saleProductSearch"
+                >
+                <i class="fas fa-search product-search-icon"></i>
+              </div>
+              <div class="search-results" id="searchResults"></div>
+            </div>
+            <div class="selected-products" id="selectedProducts" style="display: none;">
+              <h3>Produtos Selecionados</h3>
+              <div class="selected-products-list"></div>
+            </div>
+            <div class="sale-form-buttons">
+              <button class="payment-button select-payment">
+                Selecionar forma de pagamento
+              </button>
+              <button class="payment-button close-sale" onclick="closeSaleModal()">
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function loadProductReport() {
+  const content = document.querySelector('.content');
+  content.innerHTML = `
+    <h2 class="product-report-title">Relatório de Vendas dos Produtos</h2>
+    <div class="product-report-container">
+      <table class="product-report-table">
+        <thead>
+          <tr>
+            <th>Produto</th>
+            <th>Quantidade Vendida</th>
+            <th>Último Vendido</th>
+            <th>Total Vendido (R$)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- Product report data will be loaded here -->
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  updateProductReport();
+}
+
+function updateProductReport() {
+  database.ref('sales').once('value')
+    .then((snapshot) => {
+      const productStats = {};
+      
+      // Process all sales
+      snapshot.forEach((childSnapshot) => {
+        const sale = childSnapshot.val();
+        const [day, month, year] = sale.date.split('/').map(Number);
+        const saleDate = new Date(year, month - 1, day);
+        
+        sale.products.forEach(product => {
+          if (!productStats[product.name]) {
+            productStats[product.name] = {
+              totalQuantity: 0,
+              lastSold: saleDate,
+              totalAmount: 0
+            };
+          }
+          
+          const stats = productStats[product.name];
+          stats.totalQuantity += product.quantity;
+          stats.totalAmount += product.total;
+          
+          // Update last sold date if this sale is more recent
+          if (saleDate > stats.lastSold) {
+            stats.lastSold = saleDate;
+          }
+        });
+      });
+
+      // Sort products by total quantity sold (descending)
+      const sortedProducts = Object.entries(productStats)
+        .sort(([, a], [, b]) => b.totalQuantity - a.totalQuantity);
+
+      const tbody = document.querySelector('.product-report-table tbody');
+      tbody.innerHTML = sortedProducts.map(([productName, stats]) => `
+        <tr>
+          <td>${productName}</td>
+          <td>${stats.totalQuantity}</td>
+          <td>${stats.lastSold.toLocaleDateString('pt-BR')}</td>
+          <td>R$ ${stats.totalAmount.toFixed(2)}</td>
+        </tr>
+      `).join('');
+    })
+    .catch(error => {
+      console.error('Error loading product report:', error);
+    });
+}
+
+function loadStock() {
+  const content = document.querySelector('.content');
+  content.innerHTML = `
+    <h2 class="stock-title">Controle de Estoque</h2>
+    <div class="stock-container">
+      <table class="stock-table">
+        <thead>
+          <tr>
+            <th>Produto</th>
+            <th>Quantidade em Estoque</th>
+            <th>Status</th>
+            <th>Prioridade</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- Stock data will be loaded here -->
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  updateStockTable();
+}
+
+function updateStockTable() {
+  const tbody = document.querySelector('.stock-table tbody');
+  
+  // Update product sorting to include priority
+  const sortedProducts = [...window.products].sort((a, b) => {
+    // First sort by priority
+    if (a.priority && !b.priority) return -1;
+    if (!a.priority && b.priority) return 1;
+    // Then sort by quantity
+    return a.quantity - b.quantity;
+  });
+  
+  tbody.innerHTML = sortedProducts.map(product => {
+    let statusClass, statusText;
+    
+    if (product.quantity === 0) {
+      statusClass = 'low';
+      statusText = 'Sem Estoque';
+    } else if (product.quantity <= 5) {
+      statusClass = 'low';
+      statusText = 'Estoque Baixo';
+    } else if (product.quantity <= 10) {
+      statusClass = 'medium';
+      statusText = 'Estoque Médio';
+    } else {
+      statusClass = 'good';
+      statusText = 'Estoque Bom';
+    }
+    
+    return `
+      <tr>
+        <td>${product.name}</td>
+        <td>${product.quantity}</td>
+        <td>
+          <span class="stock-status ${statusClass}">
+            ${statusText}
+          </span>
+        </td>
+        <td>
+          <input type="checkbox" 
+                 class="priority-checkbox" 
+                 ${product.priority ? 'checked' : ''} 
+                 onchange="togglePriority('${product.id}', this.checked)">
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+window.togglePriority = function(productId, isPriority) {
+  database.ref('products/' + productId).update({
+    priority: isPriority
+  })
+  .then(() => {
+    console.log('Priority updated successfully');
+    updateStockTable();
+  })
+  .catch((error) => {
+    console.error('Error updating priority:', error);
+  });
+}
